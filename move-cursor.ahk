@@ -1,5 +1,5 @@
 ;; https://stackoverflow.com/a/70069592
-;; Version: 1.1.0
+;; Version: 1.1.1
 
 ; Variable to track the toggle state
 toggle := true
@@ -107,30 +107,67 @@ return
 
 highlight_pos(MouseX, MouseY)
 {
-    ; Create a red circle around the cursor position
-    Gui, Destroy
-    Gui, -Caption +ToolWindow +AlwaysOnTop
-    Gui, Color, Red
-    Gui, +LastFound
-    GuiHwnd := WinExist()
+    static pToken := 0
+    size := 120
+    thickness := 4
 
-    ; Make the window transparent
-    DetectHiddenWindows, On
-    WinSet, Transparent, 100, ahk_id %GuiHwnd%
+    ; Start GDI+
+    if (!pToken)
+    {
+        VarSetCapacity(si, A_PtrSize = 8 ? 24 : 16, 0)
+        NumPut(1, si, 0, "UInt")
+        DllCall("gdiplus\GdiplusStartup", "Ptr*", pToken, "Ptr", &si, "Ptr", 0)
+    }
+    if (!pToken)
+    {
+        DllCall("LoadLibrary", "Str", "gdiplus")
+        VarSetCapacity(si, A_PtrSize = 8 ? 24 : 16, 0)
+        NumPut(1, si, 0, "UInt")
+        DllCall("gdiplus\GdiplusStartup", "Ptr*", pToken, "Ptr", &si, "Ptr", 0)
+    }
 
-    ; Set the region to be a circle (ellipse)
-    WinSet, Region, 0-0 W100 H100 E, ahk_id %GuiHwnd%  ; 100x100 circle
+    ; Create layered window
+    Gui, HighlightRing: New
+    Gui, HighlightRing: -Caption +E0x80000 +ToolWindow +AlwaysOnTop
+    Gui, HighlightRing: Show, w%size% h%size% NA
 
-    ; Position the circle around the cursor
-    posX := MouseX - 50  ; Adjust to center the circle around the cursor
-    posY := MouseY - 50
+    Gui, HighlightRing: +LastFound
+    hwnd := WinExist()
 
-    ; Show the circle at the cursor position
-    Gui, Show, w100 h100 x%posX% y%posY%
+    ; Create GDI+ graphics on a bitmap
+    DllCall("gdiplus\GdipCreateBitmapFromScan0", "Int", size, "Int", size, "Int", 0, "Int", 0x26200A, "Ptr", 0, "Ptr*", pBitmap)
+    DllCall("gdiplus\GdipGetImageGraphicsContext", "Ptr", pBitmap, "Ptr*", pGraphics)
+    DllCall("gdiplus\GdipSetSmoothingMode", "Ptr", pGraphics, "Int", 4) ; AntiAlias
 
-    ; Sleep for a short time to keep the circle visible
-    Sleep, 200
+    ; Draw anti-aliased filled circle (red, semi-transparent)
+    DllCall("gdiplus\GdipCreateSolidFill", "UInt", 0xDDFF2020, "Ptr*", pBrush)
+    DllCall("gdiplus\GdipFillEllipse", "Ptr", pGraphics, "Ptr", pBrush, "Float", 0.0, "Float", 0.0, "Float", size, "Float", size)
+    DllCall("gdiplus\GdipDeleteBrush", "Ptr", pBrush)
 
-    ; Destroy the circle after showing it
-    Gui, Destroy
+    ; Update layered window with the bitmap
+    hdc := DllCall("GetDC", "Ptr", hwnd)
+    DllCall("gdiplus\GdipCreateHBITMAPFromBitmap", "Ptr", pBitmap, "Ptr*", hBitmap, "UInt", 0)
+    mdc := DllCall("CreateCompatibleDC", "Ptr", hdc)
+    old := DllCall("SelectObject", "Ptr", mdc, "Ptr", hBitmap)
+
+    VarSetCapacity(pt, 8, 0), NumPut(size, pt, 0, "Int"), NumPut(size, pt, 4, "Int")
+    VarSetCapacity(ptSrc, 8, 0)
+    VarSetCapacity(bf, 4, 0), NumPut(0, bf, 0, "UChar"), NumPut(0, bf, 1, "UChar"), NumPut(255, bf, 2, "UChar"), NumPut(1, bf, 3, "UChar")
+
+    posX := MouseX - size // 2
+    posY := MouseY - size // 2
+    VarSetCapacity(ptDst, 8, 0), NumPut(posX, ptDst, 0, "Int"), NumPut(posY, ptDst, 4, "Int")
+
+    DllCall("UpdateLayeredWindow", "Ptr", hwnd, "Ptr", hdc, "Ptr", &ptDst, "Ptr", &pt, "Ptr", mdc, "Ptr", &ptSrc, "UInt", 0, "Ptr", &bf, "UInt", 2)
+
+    ; Cleanup GDI objects
+    DllCall("SelectObject", "Ptr", mdc, "Ptr", old)
+    DllCall("DeleteObject", "Ptr", hBitmap)
+    DllCall("DeleteDC", "Ptr", mdc)
+    DllCall("ReleaseDC", "Ptr", hwnd, "Ptr", hdc)
+    DllCall("gdiplus\GdipDeleteGraphics", "Ptr", pGraphics)
+    DllCall("gdiplus\GdipDisposeImage", "Ptr", pBitmap)
+
+    Sleep, 300
+    Gui, HighlightRing: Destroy
 }
